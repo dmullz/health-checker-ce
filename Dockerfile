@@ -1,6 +1,6 @@
 FROM icr.io/codeengine/golang:alpine
 COPY health-checker.go /
-RUN  go install github.com/IBM/cloudant-go-sdk/cloudantv1@v0.7.6
+RUN  go get github.com/IBM/cloudant-go-sdk/cloudantv1@v0.7.6
 RUN  go build -o /health-checker /health-checker.go
 
 # Copy the exe into a smaller base image
