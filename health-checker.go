@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
@@ -25,26 +26,6 @@ type RssFeed struct {
 	Magazine        string  `json:"Magazine"`
 }
 
-type Document struct {
-	Id            string    `json:"_id"`
-	Rev           string    `json:"_rev"`
-	PublisherName string    `json:"Publisher_Name"`
-	RssFeeds      []RssFeed `json:"RSS_Feeds"`
-}
-
-type AllDocsRow struct {
-	Doc   Document `json:"doc"`
-	Id    string   `json:"id"`
-	Key   string   `json:"key"`
-	Value string   `json:"value"`
-}
-
-type AllDocsResult struct {
-	Offset    int32        `json:"offset"`
-	Rows      []AllDocsRow `json:"rows"`
-	TotalRows int32        `json:"total_rows"`
-}
-
 type Feed struct {
 	Publisher       string `json:"publisher"`
 	FeedUrl         string `json:"feed_url"`
@@ -65,7 +46,7 @@ type DBRow struct {
 
 type MagazineData struct {
 	Magazine         string
-	IngestedArticles int64
+	IngestedArticles int
 }
 
 type DBQuery struct {
@@ -90,16 +71,13 @@ type BrevoAttachment struct {
 
 type BrevoQuery struct {
 	Sender      BrevoSender       `json:"sender"`
-	To          BrevoTo           `json:"to"`
+	To          []BrevoTo         `json:"to"`
 	Subject     string            `json:"subject"`
 	HtmlContent string            `json:"htmlContent"`
 	Attachment  []BrevoAttachment `json:"attachment"`
 }
 
 func main() {
-	envs := os.Environ()
-	CLOUDANT_URL = envs["cloudant_endpoint"]
-	CLOUDANT_APIKEY = envs["cloudant_api_key"]
 
 	// Get the namespace we're in so we know how to talk to the Function
 	file := "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
@@ -117,38 +95,37 @@ func main() {
 		},
 	)
 	postAllDocsOptions := service.NewPostAllDocsOptions(
-		envs["db_name"],
+		os.Getenv("db_name"),
 	)
 	postAllDocsOptions.SetIncludeDocs(true)
-	postAllDocsOptions.SetKeys(
+	postAllDocsOptions.SetKeys([]string{
 		"_id:.+",
 		"Publisher_Name:.+",
 		"RSS_Feeds:.+",
-	)
+	})
 
-	allDocsResult, response, err := service.PostAllDocs(postAllDocsOptions)
+	allDocsResult, _, err := service.PostAllDocs(postAllDocsOptions)
 	if err != nil {
 		panic(err)
 	}
 
-	//Parse Query and build feeds
-	var docs AllDocsResult
-	err := json.Unmarshal(allDocsResult, &docs)
-	if err != nil {
-		fmt.Println("JSON decode error!")
-		panic(err)
-	}
-
+	// Parse Result from Cloudant to build slice of RSS Feeds
 	var feeds []Feed
-	for _, doc := range docs.Rows {
-		for _, rssfeed := range doc.Doc.RssFeeds {
+	for _, row := range allDocsResult.Rows {
+		var rssFeeds []RssFeed
+		err = json.Unmarshal([]byte(row.Doc.GetProperty("RSS_Feeds").(string)), &rssFeeds)
+		if err != nil {
+			fmt.Println("JSON decode error!")
+			panic(err)
+		}
+		for _, rssfeed := range rssFeeds {
 			feed := Feed{
-				Publisher:       doc.Doc.PublisherName,
+				Publisher:       row.Doc.GetProperty("Publisher_Name").(string),
 				FeedUrl:         rssfeed.RssFeedUrl,
 				FeedName:        rssfeed.RssFeedName,
 				LastUpdatedDate: rssfeed.LastUpdatedDate,
 			}
-			feeds := append(feeds, feed)
+			feeds = append(feeds, feed)
 		}
 	}
 
@@ -157,7 +134,7 @@ func main() {
 	wg := sync.WaitGroup{}
 
 	// URL to the DB
-	url := envs["sql_db_url"] + "v2/get-article-by-ingestdate-magazine"
+	url := os.Getenv("sql_db_url") + "v2/get-article-by-ingestdate-magazine"
 
 	// IngestDate of 24 hours ago
 	toAdd := -24 * time.Hour
@@ -169,7 +146,7 @@ func main() {
 	// Do all requests to the DB in parallel
 	for i := 0; i < count; i++ {
 		payload := DBQuery{
-			ApiKey:     envs["sql_db_apikey"],
+			ApiKey:     os.Getenv("sql_db_apikey"),
 			IngestDate: ingestDate.Format("2006-1-2"),
 			Magazine:   feeds[i].FeedName,
 		}
@@ -182,7 +159,7 @@ func main() {
 
 				if err == nil && res.StatusCode/100 == 2 {
 					var dbRes []DBRow
-					err := json.Unmarshal(res.Body, &dbRes)
+					err := json.NewDecoder(res.Body).Decode(&dbRes)
 					if err != nil {
 						fmt.Println("JSON decode for DB ROW error!")
 						panic(err)
@@ -256,10 +233,10 @@ func main() {
 
 	//Send CSV file in email using brevo
 	client := &http.Client{}
-	toList := []BrevoTo
+	var toList []BrevoTo
 	toList = append(toList, BrevoTo{Email: "david.mullen.085@gmail.com"})
-	toList = append(toList, BrevoTo{Email: envs["email_address"]})
-	attachmentList := []BrevoAttachment
+	toList = append(toList, BrevoTo{Email: os.Getenv("email_address")})
+	var attachmentList []BrevoAttachment
 	attachmentList = append(attachmentList, BrevoAttachment{Content: fileContent, Name: "daily_article_data.csv"})
 	payload := BrevoQuery{
 		Sender: BrevoSender{
@@ -272,12 +249,12 @@ func main() {
 		Attachment:  attachmentList,
 	}
 	payloadJson, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", "https://api.brevo.com/v3/smtp/email", payloadJson)
+	req, err := http.NewRequest("POST", "https://api.brevo.com/v3/smtp/email", bytes.NewBuffer(payloadJson))
 	if err != nil {
 		fmt.Printf("Error creating HTTP request to Brevo: %s", err)
 		panic(err)
 	}
-	req.Header.Set("api-key", envs["brevo_api_key"])
+	req.Header.Set("api-key", os.Getenv("brevo_api_key"))
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -287,7 +264,7 @@ func main() {
 	defer resp.Body.Close()
 
 	//Remove CSV file
-	err := os.Remove("daily_article_data.csv")
+	err = os.Remove("daily_article_data.csv")
 	if err != nil {
 		fmt.Printf("Failed to delete article data file: %s", err)
 		panic(err)
