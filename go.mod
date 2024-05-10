@@ -1,6 +1,6 @@
 module github.com/dmullz/health-checker-ce
 
-go 1.22.3
+go 1.21.4
 
 require github.com/IBM/cloudant-go-sdk v0.7.6
 
