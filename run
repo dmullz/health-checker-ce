@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Env Vars:
+# REGISTRY: name of the image registry/namespace to get the images
+
+# Clean up previous run
+function clean() {
+  set +ex
+  echo Cleaning...
+  (
+  ibmcloud ce sub cron delete -n cron-job-sub-hc -f --wait=true
+  ibmcloud ce job delete -n health-checker -f
+  ) > /dev/null 2>&1
+}
+
+clean
+[[ "$1" == "clean" ]] && exit 0
+
+set -ex
+export REGISTRY=${REGISTRY:-icr.io/codeengine}
+
+# Create a Job - just it's definition. The "running" instance of it
+# will be created when the event is sent to it.
+ibmcloud ce job create -n health-checker --image ${REGISTRY}/health-checker --env-from-configmap prod-configmap
+
+# Setup the cron Event Source, send event at 4:30PM every day
+ibmcloud ce sub cron create -n cron-job-sub-hc -d health-checker \
+  --destination-type job --data '{"mydata":"hello world"}' -s '30 16 * * *'
+
+# Clean up
+clean
