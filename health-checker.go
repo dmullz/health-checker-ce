@@ -90,10 +90,12 @@ func main() {
 	// Query Cloudant for the feed list
 	// selector= {"_id": {"$gt": "0"},"Publisher_Name": {"$exists": True},"RSS_Feeds": {"$exists": True}},
 	service, err := cloudantv1.NewCloudantV1UsingExternalConfig(
-		&cloudantv1.CloudantV1Options{
-			ServiceName: "CLOUDANT",
-		},
+		&cloudantv1.CloudantV1Options{},
 	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing Cloudant Service: %s", err)
+		os.Exit(1)
+	}
 	postAllDocsOptions := service.NewPostAllDocsOptions(
 		os.Getenv("db_name"),
 	)
@@ -232,12 +234,15 @@ func main() {
 	fileContent := base64.StdEncoding.EncodeToString(fileBytes)
 
 	//Send CSV file in email using brevo
+	todayDate := time.Now()
+	todayString := todayDate.Format("2006-1-2")
+	fileName := "daily_article_data_" + todayString + ".csv"
 	client := &http.Client{}
 	var toList []BrevoTo
 	toList = append(toList, BrevoTo{Email: "david.mullen.085@gmail.com"})
 	toList = append(toList, BrevoTo{Email: os.Getenv("email_address")})
 	var attachmentList []BrevoAttachment
-	attachmentList = append(attachmentList, BrevoAttachment{Content: fileContent, Name: "daily_article_data.csv"})
+	attachmentList = append(attachmentList, BrevoAttachment{Content: fileContent, Name: fileName})
 	payload := BrevoQuery{
 		Sender: BrevoSender{
 			Name:  "RSS Mailer",
