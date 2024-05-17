@@ -96,33 +96,43 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error initializing Cloudant Service: %s", err)
 		os.Exit(1)
 	}
-	postAllDocsOptions := service.NewPostAllDocsOptions(
-		os.Getenv("db_name"),
-	)
-	postAllDocsOptions.SetIncludeDocs(true)
-	postAllDocsOptions.SetKeys([]string{
-		"_id:.+",
-		"Publisher_Name:.+",
-		"RSS_Feeds:.+",
-	})
 
-	allDocsResult, _, err := service.PostAllDocs(postAllDocsOptions)
+	selector := map[string]interface{}{
+		"_id": map[string]interface{}{
+			"$gt": "0",
+		},
+		"Publisher_Name": map[string]interface{}{
+			"$exists": true,
+		},
+		"RSS_Feeds": map[string]interface{}{
+			"$exists": true,
+		},
+	}
+	dbName := os.Getenv("db_name")
+	queryOptions := &cloudantv1.PostFindOptions{
+		Db:       &dbName,
+		Selector: selector,
+	}
+
+	// Execute the query
+	findResult, _, err := service.PostFind(queryOptions)
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "Error Finding All Documents to Cloudant Service: %s", err)
+		os.Exit(1)
 	}
 
 	// Parse Result from Cloudant to build slice of RSS Feeds
 	var feeds []Feed
-	for _, row := range allDocsResult.Rows {
+	for _, doc := range findResult.Docs {
 		var rssFeeds []RssFeed
-		err = json.Unmarshal([]byte(row.Doc.GetProperty("RSS_Feeds").(string)), &rssFeeds)
+		err = json.Unmarshal([]byte(doc.GetProperty("RSS_Feeds").(string)), &rssFeeds)
 		if err != nil {
 			fmt.Println("JSON decode error!")
 			panic(err)
 		}
 		for _, rssfeed := range rssFeeds {
 			feed := Feed{
-				Publisher:       row.Doc.GetProperty("Publisher_Name").(string),
+				Publisher:       doc.GetProperty("Publisher_Name").(string),
 				FeedUrl:         rssfeed.RssFeedUrl,
 				FeedName:        rssfeed.RssFeedName,
 				LastUpdatedDate: rssfeed.LastUpdatedDate,
