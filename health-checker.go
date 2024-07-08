@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -150,7 +151,7 @@ func main() {
 	wg := sync.WaitGroup{}
 
 	// URL to the DB
-	url := os.Getenv("sql_db_url") + "v2/get-article-by-ingestdate-magazine"
+	baseDBURL := os.Getenv("sql_db_url") + "v2/get-article-by-ingestdate-magazine"
 
 	// IngestDate of 24 hours ago
 	toAdd := -24 * time.Hour
@@ -161,17 +162,16 @@ func main() {
 
 	// Do all requests to the DB in parallel
 	for i := 0; i < count; i++ {
-		payload := DBQuery{
-			ApiKey:     os.Getenv("sql_db_apikey"),
-			IngestDate: ingestDate.Format("2006-1-2"),
-			Magazine:   feeds[i].FeedName,
-		}
-		payloadJson, _ := json.Marshal(payload)
+		params := url.Values{}
+		params.Add("apikey", os.Getenv("sql_db_apikey"))
+		params.Add("ingestdate", ingestDate.Format("2006-1-2"))
+		params.Add("magazine", feeds[i].FeedName)
+		fullDBURL := baseDBURL + "?" + params.Encode()
 		wg.Add(1)
-		go func(i int, payloadJson []byte, magazine string) {
+		go func(i int, fullDBURL string, magazine string) {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
-				res, err := http.Post(url, "application/json", bytes.NewBuffer(payloadJson))
+				res, err := http.Get(fullDBURL)
 
 				if err == nil && res.StatusCode/100 == 2 {
 					var dbRes []DBRow
@@ -197,7 +197,7 @@ func main() {
 					i, err, res, string(body))
 				time.Sleep(time.Second)
 			}
-		}(i, payloadJson, feeds[i].FeedName)
+		}(i, fullDBURL, feeds[i].FeedName)
 	}
 
 	// Wait for all threads to finish before we exit
