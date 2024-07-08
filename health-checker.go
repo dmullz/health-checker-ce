@@ -18,12 +18,12 @@ import (
 )
 
 type RssFeed struct {
-	Id              string `json:"_id"`
-	RssFeedName     string `json:"RSS_Feed_Name"`
-	RssFeedUrl      string `json:"RSS_Feed_URL"`
-	LastUpdatedDate string `json:"Last_Updated_Date"`
-	Threshold       string `json:"Threshold"`
-	Magazine        string `json:"Magazine"`
+	Id              string  `json:"_id"`
+	RssFeedName     string  `json:"RSS_Feed_Name"`
+	RssFeedUrl      string  `json:"RSS_Feed_URL"`
+	LastUpdatedDate string  `json:"Last_Updated_Date"`
+	Threshold       float64 `json:"Threshold"`
+	Magazine        string  `json:"Magazine"`
 }
 
 type Feed struct {
