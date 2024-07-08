@@ -117,7 +117,7 @@ func main() {
 	// Execute the query
 	findResult, _, err := service.PostFind(queryOptions)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error Finding All Documents to Cloudant Service: %s", err)
+		fmt.Fprintf(os.Stderr, "Error Finding All Documents using Cloudant Service: %s", err)
 		os.Exit(1)
 	}
 
@@ -125,10 +125,15 @@ func main() {
 	var feeds []Feed
 	for _, doc := range findResult.Docs {
 		var rssFeeds []RssFeed
-		err = json.Unmarshal([]byte(doc.GetProperty("RSS_Feeds").(string)), &rssFeeds)
+		b, err := json.Marshal(doc.GetProperty("RSS_Feeds"))
 		if err != nil {
-			fmt.Println("JSON decode error!")
-			panic(err)
+			fmt.Fprintf(os.Stderr, "Error Marshaling RSS_Feeds interface into JSON: %s", err)
+			os.Exit(1)
+		}
+		err = json.Unmarshal(b, &rssFeeds)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error Decoding JSON: %s", err)
+			os.Exit(1)
 		}
 		for _, rssfeed := range rssFeeds {
 			feed := Feed{
