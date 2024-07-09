@@ -34,7 +34,7 @@ type Feed struct {
 }
 
 type DBRow struct {
-	Id               string  `json:"id"`
+	Id               int64   `json:"id"`
 	ArticleTitle     string  `json:"article_title"`
 	ArticlePublisher string  `json:"article_publisher"`
 	ArticleMagazine  string  `json:"article_magazine"`
