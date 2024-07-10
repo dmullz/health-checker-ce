@@ -219,28 +219,16 @@ func main() {
 		return allMagData[keys[i]] < allMagData[keys[j]]
 	})
 
-	//Build CSV file with article data
-	csvFile, err := os.Create("daily_article_data.csv")
-	defer csvFile.Close()
+	fileName := "daily_article_data.csv"
+
+	err = BuildCSV(fileName, allMagData, keys)
 	if err != nil {
-		fmt.Printf("failed creating file: %s", err)
+		fmt.Printf("Error building csv file: %s", err)
 		panic(err)
 	}
 
-	w := csv.NewWriter(csvFile)
-	defer w.Flush()
-
-	w.Write([]string{"magazine", "articles"})
-	for _, key := range keys {
-		row := []string{key, strconv.Itoa(allMagData[key])}
-		if err := w.Write(row); err != nil {
-			fmt.Printf("Failed to write magazine to file: %s", err)
-			panic(err)
-		}
-	}
-
 	//Convert CSV file to base64 to attach to email
-	fileBytes, err := os.ReadFile("daily_article_data.csv")
+	fileBytes, err := os.ReadFile(fileName)
 	if err != nil {
 		fmt.Printf("Error reading csv file: %s", err)
 		panic(err)
@@ -250,7 +238,7 @@ func main() {
 	//Send CSV file in email using brevo
 	todayDate := time.Now()
 	todayString := todayDate.Format("2006-1-2")
-	fileName := "daily_article_data_" + todayString + ".csv"
+	fileName = "daily_article_data_" + todayString + ".csv"
 	client := &http.Client{}
 	var toList []BrevoTo
 	toList = append(toList, BrevoTo{Email: "david.mullen.085@gmail.com"})
@@ -291,4 +279,28 @@ func main() {
 
 	fmt.Printf("Done\n")
 
+}
+
+func BuildCSV(fileName string, allMagData map[string]int, keys []string) error {
+	//Build CSV file with article data
+	csvFile, err := os.Create(fileName)
+	defer csvFile.Close()
+	if err != nil {
+		fmt.Printf("failed creating file: %s", err)
+		return err
+	}
+
+	w := csv.NewWriter(csvFile)
+	defer w.Flush()
+
+	w.Write([]string{"magazine", "articles"})
+	for _, key := range keys {
+		row := []string{key, strconv.Itoa(allMagData[key])}
+		if err := w.Write(row); err != nil {
+			fmt.Printf("Failed to write magazine to file: %s", err)
+			return err
+		}
+	}
+
+	return nil
 }
