@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +26,7 @@ type RssFeed struct {
 	RssFeedUrl      string `json:"RSS_Feed_URL"`
 	LastUpdatedDate string `json:"Last_Updated_Date"`
 	Magazine        string `json:"Magazine"`
+	PauseIngestion  bool   `json:"Pause_Ingestion"`
 }
 
 type Feed struct {
@@ -31,6 +34,7 @@ type Feed struct {
 	FeedUrl         string `json:"feed_url"`
 	LastUpdatedDate string `json:"last_updated_date"`
 	FeedName        string `json:"feed_name"`
+	PauseIngestion  bool   `json:"Pause_Ingestion"`
 }
 
 type DBRow struct {
@@ -75,6 +79,25 @@ type BrevoQuery struct {
 	Subject     string            `json:"subject"`
 	HtmlContent string            `json:"htmlContent"`
 	Attachment  []BrevoAttachment `json:"attachment"`
+	Bcc         []BrevoTo         `json:"bcc"`
+}
+
+type SFAccessTokenRes struct {
+	AccessToken string `json:"access_token"`
+}
+
+type SFCSMObject struct {
+	Email string `json:"email"`
+}
+
+type SFQueryRecord struct {
+	ClientSuccessManager SFCSMObject `json:"Client_Success_Manager__r"`
+}
+
+type SFQueryRes struct {
+	Records   []SFQueryRecord `json:"records"`
+	TotalSize int             `json:"totalSize"`
+	Done      bool            `json:"done"`
 }
 
 func main() {
@@ -141,8 +164,21 @@ func main() {
 				FeedUrl:         rssfeed.RssFeedUrl,
 				FeedName:        rssfeed.RssFeedName,
 				LastUpdatedDate: rssfeed.LastUpdatedDate,
+				PauseIngestion:  rssfeed.PauseIngestion,
 			}
 			feeds = append(feeds, feed)
+		}
+	}
+
+	//Send reminder emails for paused feeds
+	if string(time.Now().Weekday()) == "Friday" {
+		for _, emailFeed := range feeds {
+			if emailFeed.PauseIngestion == true {
+				err := PausedFeedReminder(emailFeed)
+				if err != nil {
+					fmt.Println("Error sending Pause Reminder email", err)
+				}
+			}
 		}
 	}
 
@@ -302,5 +338,130 @@ func BuildCSV(fileName string, allMagData map[string]int, keys []string) error {
 		}
 	}
 
+	return nil
+}
+
+func PausedFeedReminder(feed Feed) error {
+	// Get Salesforce Access Token
+	sf_token, err := GetToken()
+	if err != nil {
+		fmt.Println("Error getting Access Token for SalesForce:", err)
+		return err
+	}
+
+	queryMag := feed.FeedName
+	if feed.Publisher == "The New York Times" {
+		queryMag = "The New York Times"
+	}
+	sfQueryRes, err := QuerySalesForce(sf_token, queryMag)
+	if err != nil {
+		fmt.Println("Error Querying SalesForce:", err)
+		return err
+	}
+
+	if sfQueryRes.TotalSize < 1 {
+		//Inactive Magazine: Don't send email
+		return nil
+	}
+
+	if sfQueryRes.TotalSize > 1 {
+		fmt.Printf("Error: Client Success Manager Query has invalid size of %d\n", sfQueryRes.TotalSize)
+		return errors.New("Invalid Query Reponse Size")
+	}
+
+	err = SendEmail(sfQueryRes.Records[0].ClientSuccessManager.Email, feed)
+	if err != nil {
+		fmt.Println("Error sending email containing feed ingestion errors", err)
+		return err
+	}
+	return nil
+}
+
+func GetToken() (string, error) {
+	params := url.Values{}
+	params.Add("grant_type", "refresh_token")
+	params.Add("client_id", os.Getenv("RF_KEY"))
+	params.Add("client_secret", os.Getenv("RF_SECRET"))
+	params.Add("refresh_token", os.Getenv("RF_TOKEN"))
+	fullURL := os.Getenv("RF_URL") + "?" + params.Encode()
+	res, err := http.Get(fullURL)
+	if err == nil && res.StatusCode/100 == 2 {
+		var sfAccessTokenRes SFAccessTokenRes
+		err := json.NewDecoder(res.Body).Decode(&sfAccessTokenRes)
+		if err != nil {
+			fmt.Println("Error Decoding SalesForce Access Token JSON Response:", err)
+			return "", err
+		}
+		return sfAccessTokenRes.AccessToken, nil
+	}
+	return "", err
+}
+
+func QuerySalesForce(sf_token string, magazine string) (*SFQueryRes, error) {
+	// Query Salesforce for client success manager email
+	modifiedMag := strings.Replace(magazine, "'", "\\'", -1)
+	client := &http.Client{}
+	params := url.Values{}
+	params.Add("q", "SELECT Client_Success_Manager__r.Email from Magazine__c where Inactive__c = false AND Name like '"+modifiedMag+"'")
+	fullURL := os.Getenv("SF_URL") + "v61.0/query/?" + params.Encode()
+	req, err := http.NewRequest("GET", fullURL, nil)
+	if err != nil {
+		fmt.Printf("Error creating HTTP request to Salesforce: %s", err)
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+sf_token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Close = true
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var sfQueryRes SFQueryRes
+	err = json.NewDecoder(resp.Body).Decode(&sfQueryRes)
+	if err != nil {
+		fmt.Printf("Error Decoding SalesForce Query JSON Response for magazine: %s FullURL: %s Error: %s\n", magazine, fullURL, err)
+		return nil, err
+	}
+	return &sfQueryRes, nil
+}
+
+func SendEmail(email string, emailFeed Feed) error {
+	//Send email notifying Client Success Manager of Fails using brevo
+
+	email_body := "The feed for <b>" + emailFeed.FeedName + "</b> (" + emailFeed.Publisher + ") is paused. Please work with the Publisher to resolve the errors and unpause the feed.<br><br>URL: <a href='" + emailFeed.FeedUrl + "'>" + emailFeed.FeedUrl + "</a><br><br><br>"
+	//email_body = email_body + "Client Success Manager email for this feed is: " + email + ".<br><br><br>"
+
+	client := &http.Client{}
+	var toList []BrevoTo
+	toList = append(toList, BrevoTo{Email: os.Getenv("email_address")})
+	toList = append(toList, BrevoTo{Email: email})
+	var bccList []BrevoTo
+	bccList = append(bccList, BrevoTo{Email: "david.mullen.085@gmail.com"})
+	payload := BrevoQuery{
+		Sender: BrevoSender{
+			Name:  "RSS Mailer",
+			Email: "WM.RSS.mailer@gmail.com",
+		},
+		To:          toList,
+		Bcc:         bccList,
+		Subject:     "Paused Feed Reminder",
+		HtmlContent: "<html><head></head><body>" + email_body + "<br><br><br>WM RSS Mailer</body></html>",
+	}
+	payloadJson, _ := json.Marshal(payload)
+	req, err := http.NewRequest("POST", "https://api.brevo.com/v3/smtp/email", bytes.NewBuffer(payloadJson))
+	if err != nil {
+		fmt.Printf("Error creating HTTP request to Brevo: %s\n", err)
+		return err
+	}
+	req.Header.Set("api-key", os.Getenv("brevo_api_key"))
+	req.Close = true
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return err
+	}
+	defer resp.Body.Close()
 	return nil
 }
