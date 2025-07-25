@@ -171,9 +171,12 @@ func main() {
 	}
 
 	//Send reminder emails for paused feeds
+	fmt.Printf("Sending Paused Feed Reminder Email since today is %s ...\n", string(time.Now().Weekday()))
 	if string(time.Now().Weekday()) == "Friday" {
+		fmt.Printf("Sending Paused Feed Reminder Email since today is %s ...\n", string(time.Now().Weekday()))
 		for _, emailFeed := range feeds {
 			if emailFeed.PauseIngestion == true {
+				fmt.Printf("Sending Paused Feed Reminder Email For Feed %s from Publisher %s\n", emailFeed.FeedName, emailFeed.Publisher)
 				err := PausedFeedReminder(emailFeed)
 				if err != nil {
 					fmt.Println("Error sending Pause Reminder email", err)
