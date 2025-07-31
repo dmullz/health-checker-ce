@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -175,14 +174,9 @@ func main() {
 	targetDay := time.Friday
 	if currentDay == targetDay {
 		fmt.Printf("Sending Paused Feed Reminder Email since today is %d ...\n", int(time.Now().Weekday()))
-		for _, emailFeed := range feeds {
-			if emailFeed.PauseIngestion == true {
-				fmt.Printf("Sending Paused Feed Reminder Email For Feed %s from Publisher %s\n", emailFeed.FeedName, emailFeed.Publisher)
-				err := PausedFeedReminder(emailFeed)
-				if err != nil {
-					fmt.Println("Error sending Pause Reminder email", err)
-				}
-			}
+		err := PausedFeedReminder(feeds)
+		if err != nil {
+			fmt.Println("Error checking & Sending paused feeds reminder emails")
 		}
 	}
 
@@ -345,7 +339,7 @@ func BuildCSV(fileName string, allMagData map[string]int, keys []string) error {
 	return nil
 }
 
-func PausedFeedReminder(feed Feed) error {
+func PausedFeedReminder(feeds []Feed) error {
 	// Get Salesforce Access Token
 	sf_token, err := GetToken()
 	if err != nil {
@@ -353,31 +347,44 @@ func PausedFeedReminder(feed Feed) error {
 		return err
 	}
 
-	queryMag := feed.FeedName
-	if feed.Publisher == "The New York Times" {
-		queryMag = "The New York Times"
-	}
-	sfQueryRes, err := QuerySalesForce(sf_token, queryMag)
-	if err != nil {
-		fmt.Println("Error Querying SalesForce:", err)
-		return err
+	csmEmailFeed := make(map[string][]Feed)
+	for _, emailFeed := range feeds {
+		if emailFeed.PauseIngestion == true {
+
+			queryMag := emailFeed.FeedName
+			if emailFeed.Publisher == "The New York Times" {
+				queryMag = "The New York Times"
+			}
+			sfQueryRes, err := QuerySalesForce(sf_token, queryMag)
+			if err != nil {
+				fmt.Println("Error Querying SalesForce:", err)
+				return err
+			}
+
+			if sfQueryRes.TotalSize < 1 {
+				//Inactive Magazine: Don't send email
+				continue
+			}
+
+			if sfQueryRes.TotalSize > 1 {
+				fmt.Printf("Error: Client Success Manager Query has invalid size of %d\n", sfQueryRes.TotalSize)
+				continue
+			}
+
+			csmEmailFeed[sfQueryRes.Records[0].ClientSuccessManager.Email] = append(csmEmailFeed[sfQueryRes.Records[0].ClientSuccessManager.Email], emailFeed)
+
+			fmt.Printf("Sending Paused Feed Reminder Email For Feed %s from Publisher %s\n", emailFeed.FeedName, emailFeed.Publisher)
+		}
 	}
 
-	if sfQueryRes.TotalSize < 1 {
-		//Inactive Magazine: Don't send email
-		return nil
+	for email := range csmEmailFeed {
+		err = SendEmail(email, csmEmailFeed[email])
+		if err != nil {
+			fmt.Println("Error sending email containing feed ingestion errors", err)
+			return err
+		}
 	}
 
-	if sfQueryRes.TotalSize > 1 {
-		fmt.Printf("Error: Client Success Manager Query has invalid size of %d\n", sfQueryRes.TotalSize)
-		return errors.New("Invalid Query Reponse Size")
-	}
-
-	err = SendEmail(sfQueryRes.Records[0].ClientSuccessManager.Email, feed)
-	if err != nil {
-		fmt.Println("Error sending email containing feed ingestion errors", err)
-		return err
-	}
 	return nil
 }
 
@@ -431,11 +438,13 @@ func QuerySalesForce(sf_token string, magazine string) (*SFQueryRes, error) {
 	return &sfQueryRes, nil
 }
 
-func SendEmail(email string, emailFeed Feed) error {
+func SendEmail(email string, emailFeeds []Feed) error {
 	//Send email notifying Client Success Manager of Fails using brevo
+	email_body := ""
 
-	email_body := "The feed for <b>" + emailFeed.FeedName + "</b> (" + emailFeed.Publisher + ") is paused. Please work with the Publisher to resolve the errors and unpause the feed.<br><br>URL: <a href='" + emailFeed.FeedUrl + "'>" + emailFeed.FeedUrl + "</a><br><br><br>"
-	//email_body = email_body + "Client Success Manager email for this feed is: " + email + ".<br><br><br>"
+	for _, feed := range emailFeeds {
+		email_body = email_body + "The feed for <b>" + feed.FeedName + "</b> (" + feed.Publisher + ") is paused. Please work with the Publisher to resolve the errors and unpause the feed.<br><br>URL: <a href='" + feed.FeedUrl + "'>" + feed.FeedUrl + "</a><br><br><br>"
+	}
 
 	client := &http.Client{}
 	var toList []BrevoTo
